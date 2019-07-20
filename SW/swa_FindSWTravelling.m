@@ -74,6 +74,51 @@ else
 
 end
 
+    %% ~~~~~~~~~ ADDED BY ANNA
+    
+    % user inputs: technically to add outside this function
+    C3_index = 59; % C3 in 185 chanlocs
+    C4_index = 155; % C4 in 185 chanlocs
+    measurement_input = 56;
+    
+    % find scaling factor for real head dimensions 
+    switch measurement_input
+        case 47
+            measured_C3_C4_cm= 12;
+        case 51
+            measured_C3_C4_cm= 13;
+        case 54
+            measured_C3_C4_cm= 14;
+        case 56
+            measured_C3_C4_cm= 15;
+        case 58
+            measured_C3_C4_cm= 16;
+    end
+    C3_pos   = [Info.Electrodes(C3_index).X Info.Electrodes(C3_index).Y];
+    C4_pos   = [Info.Electrodes(C4_index).X Info.Electrodes(C4_index).Y];
+    loc_file_C3C4_distance = sqrt(sum((C3_pos - C4_pos).^2, 2));
+    scaleF = measured_C3_C4_cm/loc_file_C3C4_distance;
+    
+    % chanlocs.XYZ are electrode positions in 'units'
+    % x y z are scaled chanlocs (streateched to a head with circumference 
+    % that we use to project the wave on a 'real' scalp (in cm))
+    x = [Info.Electrodes.X]' * scaleF;
+    y = [Info.Electrodes.Y]' * scaleF;
+    z = [Info.Electrodes.Z]' * scaleF;
+    
+    % parameters for 2D transformation from egi chanlocs to 40*40 grid
+    a  = min(x);
+    x1 = x - a;
+    b  = max(x1);
+    c  = min(y);
+    y1 = y - c;
+    d  = max(y1);
+    
+    % find the function of the scaled surface
+    Fspazio = scatteredInterpolant(x, y, z, 'linear');
+    
+    %% ~~~~~~~~~ 
+
 %% Loop for each SW
 if isempty(indSW)
     loopRange = 1:length(SW);
@@ -150,6 +195,43 @@ for nSW = loopRange
     tDist = cellfun(@(x) sum(x), Distances);    %% Plot Functions
     Streams(tDist < max(tDist)/4) = [];
     Distances(tDist < max(tDist)/4) = [];
+    
+        %% ~~~~~~~~~~ ADDED BY ANNA: LOCAL SPEED
+    
+    % create grid with delays (40x40)
+    XYrange = linspace(1, Info.Parameters.Travelling_GS, Info.Parameters.Travelling_GS);
+    XYmesh = XYrange(ones(Info.Parameters.Travelling_GS,1),:);
+    x1 = reshape(XYmesh, 1, []);
+    x2 = reshape(XYmesh', 1, []);
+    ytime = reshape([SW(nSW).Travelling_DelayMap]', 1, []);
+    
+    % remove isnan
+    x1(isnan(ytime)) = [];
+    x2(isnan(ytime)) = [];
+    ytime(isnan(ytime)) = [];    
+    
+    % interpolate delays on a gridded surface (and not on electrode surface)
+    Ftime = scatteredInterpolant(x1',x2',ytime');                 
+    % calculate the delays between each point of the traveling streams of
+    % each wave and convert in seconds
+    sLocalDelay = cellfun(@(x) abs(diff(Ftime(x')))/ Info.Recording.sRate, Streams, 'UniformOutput', false);  
+
+%   put each stream back in 2d (or 3d) using converison factor from 40*40 grid to real electrode dimensions
+    sLocalPosition = cellfun(@(x) 0.01 * ((x' * b)/(Info.Parameters.Travelling_GS-1) - 1 + a), Streams, 'UniformOutput', false);
+%     TODO: 3dtest = cellfun(@(x) Fspazio(x(:,1), x(:,2)), sLocalPosition, 'UniformOutput', false); % calcolate the 3rd dimension
+
+    % compute local speed (absolute travelled distance divided the delay)
+    sLocalDistance = cellfun(@(x) sqrt(sum(diff(x).^2, 2)), sLocalPosition, 'UniformOutput', false);
+    SW(nSW).LocalSpeed    = cellfun(@(x,y) x./y, sLocalDistance, sLocalDelay, 'UniformOutput',false);
+%     SW(nSW).LocalSpeed    = cell2mat(cellfun(@(x) nanmedian(x), sLocalSpeed, 'UniformOutput', false));
+    
+    % compute total speed
+    sTotalDistance = cell2mat(cellfun(@(x) sum(x), sLocalDistance, 'UniformOutput', false));
+    sTotalTime = cell2mat(cellfun(@(x) sum(x), sLocalDelay, 'UniformOutput', false));
+    SW(nSW).TotalSpeed = sTotalDistance./sTotalTime;
+        
+    %% ~~~~~~~~~~ 
+
    
     % Longest displacement
     tDisp = cellfun(@(x) (sum((x(:,1)-x(:,end)).^2))^0.5, Streams); % total displacement
